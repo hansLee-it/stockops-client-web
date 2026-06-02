@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import {
   addPurchaseOrderItem,
+  cancelPurchaseOrder,
   clearChatHistory,
   createPurchaseOrder,
   fetchCenters,
@@ -27,9 +28,17 @@ import {
   logout,
   refreshSession,
   sendChatMessage,
+  submitPurchaseOrder,
 } from './api'
-import { canUseChatbot, filterInventory, validatePurchaseOrderDraft, visibleMenuItems, type PurchaseOrderDraft } from './domain'
-import type { AuthenticatedUser, ChatMessage } from './types'
+import {
+  canManagePurchaseOrder,
+  canUseChatbot,
+  filterInventory,
+  validatePurchaseOrderDraft,
+  visibleMenuItems,
+  type PurchaseOrderDraft,
+} from './domain'
+import type { AuthenticatedUser, ChatMessage, PurchaseOrder } from './types'
 
 type ViewId = 'inventory' | 'orders'
 
@@ -121,7 +130,7 @@ export default function App() {
           </div>
         </header>
         {currentView === 'inventory' && <InventoryPage />}
-        {currentView === 'orders' && <OrdersPage />}
+        {currentView === 'orders' && <OrdersPage user={user} />}
       </main>
       <ChatbotOverlay enabled={chatbotEnabled} />
     </div>
@@ -187,15 +196,17 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthenticatedUser) => void }
 
 function InventoryPage() {
   const [query, setQuery] = useState('')
+  const [centerId, setCenterId] = useState('')
   const [warehouseId, setWarehouseId] = useState('')
   const [lowStockOnly, setLowStockOnly] = useState(false)
 
   const inventory = useQuery({ queryKey: ['inventory'], queryFn: fetchInventory })
+  const centers = useQuery({ queryKey: ['centers'], queryFn: fetchCenters })
   const warehouses = useQuery({ queryKey: ['warehouses'], queryFn: fetchWarehouses })
 
   const rows = useMemo(
-    () => filterInventory(inventory.data ?? [], { query, warehouseId, lowStockOnly }),
-    [inventory.data, lowStockOnly, query, warehouseId],
+    () => filterInventory(inventory.data ?? [], { query, centerId, warehouseId, lowStockOnly }),
+    [centerId, inventory.data, lowStockOnly, query, warehouseId],
   )
 
   return (
@@ -205,6 +216,14 @@ function InventoryPage() {
           <Search size={18} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="상품, 바코드, 로트 검색" />
         </label>
+        <select value={centerId} onChange={(event) => setCenterId(event.target.value)}>
+          <option value="">전체 센터</option>
+          {(centers.data ?? []).map((center) => (
+            <option key={center.id} value={center.id}>
+              {center.name}
+            </option>
+          ))}
+        </select>
         <select value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)}>
           <option value="">전체 위치</option>
           {(warehouses.data ?? []).map((warehouse) => (
@@ -253,14 +272,27 @@ function InventoryPage() {
   )
 }
 
-function OrdersPage() {
+function OrdersPage({ user }: { user: AuthenticatedUser }) {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<PurchaseOrderDraft>(emptyDraft)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null)
+  const [managementMessage, setManagementMessage] = useState('')
   const orders = useQuery({ queryKey: ['purchase-orders'], queryFn: fetchPurchaseOrders })
   const centers = useQuery({ queryKey: ['centers'], queryFn: fetchCenters })
   const warehouses = useQuery({ queryKey: ['warehouses'], queryFn: fetchWarehouses })
   const products = useQuery({ queryKey: ['products'], queryFn: fetchProducts })
+
+  const displayedOrder = useMemo(() => {
+    if (!selectedOrder) {
+      return null
+    }
+    return orders.data?.find((order) => order.id === selectedOrder.id) ?? selectedOrder
+  }, [orders.data, selectedOrder])
+
+  const canManageDisplayedOrder = Boolean(
+    displayedOrder && displayedOrder.status === 'PENDING' && canManagePurchaseOrder(user, displayedOrder),
+  )
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -275,6 +307,24 @@ function OrdersPage() {
     },
     onSuccess: () => {
       setDraft(emptyDraft)
+      queryClient.invalidateQueries({ queryKey: ['purchase-orders'] })
+    },
+  })
+
+  const submitMutation = useMutation({
+    mutationFn: submitPurchaseOrder,
+    onSuccess: (updatedOrder) => {
+      setManagementMessage('발주가 제출되었습니다.')
+      setSelectedOrder((current) => (current?.id === updatedOrder.id ? updatedOrder : current))
+      queryClient.invalidateQueries({ queryKey: ['purchase-orders'] })
+    },
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: cancelPurchaseOrder,
+    onSuccess: (updatedOrder) => {
+      setManagementMessage('발주가 취소되었습니다.')
+      setSelectedOrder(updatedOrder)
       queryClient.invalidateQueries({ queryKey: ['purchase-orders'] })
     },
   })
@@ -339,21 +389,92 @@ function OrdersPage() {
           <EmptyState title="발주 내역 조회에 실패했습니다." />
         ) : (
           <div className="order-list">
-            {(orders.data ?? []).map((order) => (
-              <article className="order-item" key={order.id}>
-                <div>
-                  <strong>{order.poNumber ?? `PO-${order.id}`}</strong>
-                  <small>{order.supplierName ?? order.supplier ?? '공급사 미지정'}</small>
-                </div>
-                <span className="badge">{order.status}</span>
-              </article>
-            ))}
+            {(orders.data ?? []).map((order) => {
+              const isSubmitting = submitMutation.isPending && submitMutation.variables === order.id
+              return (
+                <article className="order-item" key={order.id}>
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    onClick={() => {
+                      setSelectedOrder(order)
+                      setManagementMessage('')
+                    }}
+                  >
+                    <span>
+                      <strong>{order.poNumber ?? `PO-${order.id}`}</strong>
+                      <small>{order.supplierName ?? order.supplier ?? '공급사 미지정'}</small>
+                    </span>
+                  </button>
+                  <span className="badge">{order.status}</span>
+                  <button className="primary-button" type="button" disabled={isSubmitting} onClick={() => submitMutation.mutate(order.id)}>
+                    {isSubmitting ? '제출 중' : '제출'}
+                  </button>
+                </article>
+              )
+            })}
             {(orders.data ?? []).length === 0 && <EmptyState title="발주 내역이 없습니다." />}
           </div>
+        )}
+        {displayedOrder && (
+          <section className="panel">
+            <div className="drawer-head">
+              <div>
+                <h3>{displayedOrder.poNumber ?? `PO-${displayedOrder.id}`}</h3>
+                <small>{displayedOrder.supplierName ?? displayedOrder.supplier ?? '공급사 미지정'}</small>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setSelectedOrder(null)} aria-label="발주 상세 닫기">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="data-table" role="table" aria-label="발주 상세 정보">
+              <div className="table-row" role="row">
+                <span>상태</span>
+                <span className="badge">{displayedOrder.status}</span>
+                <span>생성일</span>
+                <span>{formatDate(displayedOrder.createdAt ?? displayedOrder.requestedAt)}</span>
+                <span>{displayedOrder.requestingCenter?.name ?? '-'}</span>
+              </div>
+            </div>
+            <h4>품목</h4>
+            <div className="order-list">
+              {(displayedOrder.items ?? []).map((item) => (
+                <article className="order-item" key={item.id}>
+                  <div>
+                    <strong>{item.product?.name ?? `상품 #${item.product?.id ?? item.id}`}</strong>
+                    <small>수량 {(item.requestedQuantity ?? item.quantity ?? 0).toLocaleString()}</small>
+                  </div>
+                </article>
+              ))}
+              {(displayedOrder.items ?? []).length === 0 && <EmptyState title="발주 품목이 없습니다." />}
+            </div>
+            {canManageDisplayedOrder && (
+              <div className="toolbar">
+                <button className="ghost-button" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate(displayedOrder.id)}>
+                  {cancelMutation.isPending ? '취소 중' : '취소'}
+                </button>
+                <button className="ghost-button" type="button" onClick={() => setManagementMessage('수정은 상세 편집 API 연결 후 사용할 수 있습니다.')}>
+                  수정
+                </button>
+              </div>
+            )}
+            {managementMessage && <p className="hint">{managementMessage}</p>}
+            {submitMutation.isError && <p className="error-text">발주 제출에 실패했습니다.</p>}
+            {cancelMutation.isError && <p className="error-text">발주 취소에 실패했습니다.</p>}
+          </section>
         )}
       </section>
     </div>
   )
+}
+
+function formatDate(value?: string): string {
+  if (!value) {
+    return '-'
+  }
+
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('ko-KR')
 }
 
 function ChatbotOverlay({ enabled }: { enabled: boolean }) {

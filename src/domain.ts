@@ -1,4 +1,4 @@
-import type { AuthenticatedUser, InventoryItem, RoleName } from './types'
+import type { AuthenticatedUser, InventoryItem, PurchaseOrder, RoleName } from './types'
 
 export type NavItem = {
   id: 'inventory' | 'orders' | 'chat'
@@ -44,6 +44,14 @@ export function canUseChatbot(user: AuthenticatedUser | null): boolean {
   return Boolean(chatItem && canAccess(user, chatItem))
 }
 
+export function canManagePurchaseOrder(user: AuthenticatedUser | null, order: PurchaseOrder): boolean {
+  if (!user) {
+    return false
+  }
+
+  return user.id === order.requestedBy || normalizeRole(user.role) === 'STORE_MANAGER'
+}
+
 export function isLowStock(item: InventoryItem): boolean {
   const available = item.availableQuantity ?? item.quantity - (item.reservedQuantity ?? 0)
   const safety = item.safetyStockQuantity ?? 0
@@ -61,9 +69,11 @@ export function filterInventory(
       [item.productName, item.productBarcode, item.locationCode, item.locationName, item.lotNumber]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query))
+    const itemCenterId = (item as InventoryItem & { centerId?: number | null }).centerId
+    const matchesCenter = !filters.centerId || String(itemCenterId ?? '') === filters.centerId
     const matchesWarehouse = !filters.warehouseId || String(item.locationId ?? '') === filters.warehouseId
     const matchesLowStock = !filters.lowStockOnly || isLowStock(item)
-    return matchesQuery && matchesWarehouse && matchesLowStock
+    return matchesQuery && matchesCenter && matchesWarehouse && matchesLowStock
   })
 }
 

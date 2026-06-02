@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { canAccess, canUseChatbot, filterInventory, isLowStock, validatePurchaseOrderDraft, visibleMenuItems } from './domain'
-import type { AuthenticatedUser, InventoryItem } from './types'
+import {
+  canAccess,
+  canManagePurchaseOrder,
+  canUseChatbot,
+  filterInventory,
+  isLowStock,
+  validatePurchaseOrderDraft,
+  visibleMenuItems,
+} from './domain'
+import type { AuthenticatedUser, InventoryItem, PurchaseOrder } from './types'
 
 const user: AuthenticatedUser = {
   id: 1,
@@ -50,5 +58,24 @@ describe('purchase order draft validation', () => {
     expect(errors.productId).toBeTruthy()
     expect(errors.quantity).toBeTruthy()
     expect(errors.reason).toBeTruthy()
+  })
+})
+
+describe('purchase order permissions', () => {
+  const order: PurchaseOrder = {
+    id: 100,
+    status: 'PENDING',
+    requestedBy: 1,
+  }
+
+  it('allows the creator or store manager to manage purchase orders', () => {
+    expect(canManagePurchaseOrder(user, order)).toBe(true)
+    expect(canManagePurchaseOrder({ ...user, id: 2 }, order)).toBe(true)
+    expect(canManagePurchaseOrder({ ...user, id: 1, role: 'STORE_STAFF' }, order)).toBe(true)
+  })
+
+  it('rejects non-creators without the store manager role', () => {
+    expect(canManagePurchaseOrder({ ...user, id: 2, role: 'STORE_STAFF' }, order)).toBe(false)
+    expect(canManagePurchaseOrder(null, order)).toBe(false)
   })
 })

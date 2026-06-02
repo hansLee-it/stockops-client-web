@@ -77,6 +77,17 @@ export async function submitPurchaseOrder(orderId: number): Promise<PurchaseOrde
   return apiRequest<PurchaseOrder>(`/v1/purchase-orders/${orderId}/submit`, { method: 'POST' })
 }
 
+export async function cancelPurchaseOrder(orderId: number): Promise<PurchaseOrder> {
+  return apiRequest<PurchaseOrder>(`/v1/purchase-orders/${orderId}/cancel`, { method: 'POST' })
+}
+
+export async function updatePurchaseOrder(orderId: number, data: Partial<PurchaseOrder>): Promise<PurchaseOrder> {
+  return apiRequest<PurchaseOrder>(`/v1/purchase-orders/${orderId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
 export async function fetchChatHistory(): Promise<ChatMessage[]> {
   return apiRequest<ChatMessage[]>('/v1/ai/chat/history')
 }
